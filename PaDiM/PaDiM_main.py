@@ -68,7 +68,7 @@ if __name__ == "__main__":
     opt = args
     opt.seed = 10
     opt.rd = 1000
-    opt.target = 'pipe_fryum'
+    opt.target = 'chewinggum'
     opt.batch_size = 32
     opt.is_plot = True
     opt.net = 'eff'

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # """
 # mvtec_ad_loader.py
-#   2021.05.06. @chanwoo.park
+#   Original Author: 2021.05.02. @chanwoo.park
+#   Edited by MarShao0124 2025.03.06#   
 #   Load mvtec_ad dataset
 #   Reference:
 #       Paul Bergmann, Michael Fauser, David Sattlegger, and Carsten Steger,

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # """
 # padim.py
-#   2021.05.02. @chanwoo.park
+#   Original Author: 2021.05.02. @chanwoo.park
+#   Edited by MarShao0124 2025.03.06
 #   PaDiM algorithm
 #   Reference:
 #       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
@@ -26,7 +27,7 @@ from scipy.spatial.distance import mahalanobis
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'code'))
 from mvtec_loader import MVTecADLoader
-
+from VisA_loader import VisALoader
 from PaDiM_utils import embedding_concat, plot_fig, draw_auc, draw_precision_recall
 
 
@@ -65,8 +66,15 @@ def embedding_net(net_type='res'):
     return tf.keras.Model(model.input, outputs=[layer1, layer2, layer3]), shape
 
 
-def padim(category, batch_size, rd, net_type='eff', is_plot=False):
-    loader = MVTecADLoader()
+def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec'):
+    if data == 'mvtec':
+        loader = MVTecADLoader()
+    elif data == 'visa':
+        loader = VisALoader()
+    else:
+        raise Exception("[NotAllowedDataset] dataset is not allowed ")
+    
+    
     loader.load(category=category, repeat=1, max_rot=0)
 
     train_set = loader.train.batch(batch_size=batch_size, drop_remainder=True).shuffle(buffer_size=loader.num_train,
@@ -162,7 +170,7 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False):
         fpr, tpr, _ = metrics.roc_curve(gt_list, img_scores)
         precision, recall, _ = metrics.precision_recall_curve(gt_list, img_scores)
 
-        save_dir = os.path.join(os.getcwd(), 'img')
+        save_dir = os.path.join(os.path.dirname(__file__), 'img/img_'+category)
         if os.path.isdir(save_dir) is False:
             os.mkdir(save_dir)
         draw_auc(fpr, tpr, img_roc_auc, os.path.join(save_dir, 'AUROC-{}.png'.format(category)))
@@ -205,7 +213,7 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False):
     print('[{}] image ROCAUC: {:.04f}\t pixel ROCAUC: {:.04f}'.format(category, img_roc_auc, patch_auc))
 
     if is_plot is True:
-        save_dir = os.path.join(os.path.dirname(__file__), 'img')
+        save_dir = os.path.join(os.path.dirname(__file__), 'img/img_'+category)
         if os.path.isdir(save_dir) is False:
             os.mkdir(save_dir)
         plot_fig(test_imgs, scores, gt_mask, best_ths, save_dir, category)

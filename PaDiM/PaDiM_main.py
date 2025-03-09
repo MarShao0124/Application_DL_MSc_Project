@@ -52,7 +52,7 @@ parser.add_argument("--data", default='mvtec', type=str, help="Which dataset to 
 args = parser.parse_args()
 
 # Target list for different datasets
-"""
+
 targets = {
     'mvtec': ['bottle', 'cable', 'capsule', 'carpet', 'grid', 'hazelnut', 
               'leather', 'metal_nut', 'pill', 'screw','tile', 'toothbrush', 
@@ -62,21 +62,23 @@ targets = {
               'macaroni2', 'capsules', 'pcb1', 'chewinggum', 'macaroni1', 
               'cashew']
 }
-"""
+
 
 if __name__ == "__main__":
     opt = args
     opt.seed = 10
-    opt.rd = 1000
-    opt.target = 'chewinggum'
+    opt.rd = 100
+    opt.target = 'pcb3'
     opt.batch_size = 32
     opt.is_plot = True
-    opt.net = 'eff'
-    opt.data = 'visa'
+    opt.net = 'res'
+    opt.data = 'mvtec'
 
     if opt.seed > -1:
         np.random.seed(opt.seed)
         random.seed(opt.seed)
         tf.random.set_seed(opt.seed)
 
-    padim(category=opt.target, batch_size=opt.batch_size, rd=opt.rd, net_type=opt.net, is_plot=opt.is_plot, data=opt.data)
+    for each in targets[opt.data]:
+        opt.target = each
+        padim(category=opt.target, batch_size=opt.batch_size, rd=opt.rd, net_type=opt.net, is_plot=opt.is_plot, data=opt.data)

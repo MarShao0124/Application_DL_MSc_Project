@@ -13,7 +13,7 @@
 #   IMPORT #
 ############
 # 1. Built-in modules
-import os, sys
+import os, sys, time
 
 # 2. Third-party modules
 import numpy as np
@@ -28,7 +28,7 @@ from scipy.spatial.distance import mahalanobis
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'code'))
 from mvtec_loader import MVTecADLoader
 from VisA_loader import VisALoader
-from PaDiM_utils import embedding_concat, plot_fig, draw_auc, draw_precision_recall
+from PaDiM_utils import embedding_concat, plot_fig, draw_auc, draw_precision_recall, save_result
 
 
 ################
@@ -84,6 +84,7 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
     net, _shape = embedding_net(net_type=net_type)
     h, w, c = _shape  # height and width of layer1, channel sum of layer 1, 2, and 3, and randomly sampled dimension
 
+    # concatenate patch of layer1, layer2, and layer3 of the pre-trained network
     out = []
     for x, _, _ in train_set:
         l1, l2, l3 = net(x)
@@ -111,7 +112,13 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
 
     train_outputs = [mu, cov]
 
+    ################
+    #   TEST DATA  #
+    ################
     out, gt_list, gt_mask, batch_size, test_imgs = [], [], [], 1, []
+
+    start_time = time.time()
+
     #  x - data |   y - mask    |   z - binary label
     for x, y, z in test_set:
         test_imgs.append(x.numpy())
@@ -145,6 +152,8 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
 
     dist_list = np.reshape(np.transpose(np.asarray(dist_list), axes=[1, 0]), (b, h, w))
 
+    end_time = time.time()
+    inference_time = (end_time - start_time)/len(test_set)
     ################
     #   DATA Level #
     ################
@@ -170,12 +179,12 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
         fpr, tpr, _ = metrics.roc_curve(gt_list, img_scores)
         precision, recall, _ = metrics.precision_recall_curve(gt_list, img_scores)
 
-        save_dir = os.path.join(os.path.dirname(__file__), 'img/img_'+category)
+        save_dir = os.path.join(os.path.dirname(__file__), 'img',data,'img_'+category)
         if os.path.isdir(save_dir) is False:
             os.mkdir(save_dir)
         draw_auc(fpr, tpr, img_roc_auc, os.path.join(save_dir, 'AUROC-{}.png'.format(category)))
         base_line = np.sum(gt_list) / len(gt_list)
-        draw_precision_recall(precision, recall, base_line, os.path.join(os.path.join(save_dir,
+        f1 = draw_precision_recall(precision, recall, base_line, os.path.join(os.path.join(save_dir,
                                                                                       'PR-{}.png'.format(category))))
 
     #################
@@ -213,9 +222,12 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
     print('[{}] image ROCAUC: {:.04f}\t pixel ROCAUC: {:.04f}'.format(category, img_roc_auc, patch_auc))
 
     if is_plot is True:
-        save_dir = os.path.join(os.path.dirname(__file__), 'img/img_'+category)
+        save_dir = os.path.join(os.path.dirname(__file__), 'img',data,'img_'+category)
         if os.path.isdir(save_dir) is False:
             os.mkdir(save_dir)
         plot_fig(test_imgs, scores, gt_mask, best_ths, save_dir, category)
+
+    save_dir = os.path.join(os.path.dirname(__file__), 'img',data,data+'.csv')
+    save_result(save_dir, category,net_type,batch_size,rd,img_roc_auc, patch_auc, f1, base_line, inference_time)
 
     return img_roc_auc, patch_auc

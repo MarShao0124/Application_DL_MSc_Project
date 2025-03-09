@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # """
-# padim.py
-#   2021.05.02. @chanwoo.park
-#   PaDiM algorithm
+# main.py
+#   Original Author: 2021.05.02. @chanwoo.park
+#   Edited by MarShao0124 2025.03.09
+#   run PaDiM algorithm
 #   Reference:
 #       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
 #       arXiv preprint arXiv:2011.08785 (2020).
@@ -19,6 +20,7 @@ import matplotlib
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from skimage import morphology
 from skimage.segmentation import mark_boundaries
@@ -154,3 +156,22 @@ def draw_precision_recall(precision, recall, base_line, path):
     plt.close()
 
     return np.max(f1_score)
+
+
+def save_result(path, category, net_type, batch_size, rd ,auc, patch_auc, f1, base_line, inference_time):
+    if not os.path.exists(path):
+        df = pd.DataFrame(columns=['Category', 'net_type', 'batch_size', 'rd', 'Image_ROCAUC', 'Patch_ROCAUC', 'F1', 'BaseLine', 'InferenceTime(s)'])
+    else:
+        df = pd.read_csv(path)
+
+    new_row = pd.DataFrame([{'Category': category, 
+                             'net_type': net_type,
+                             'batch_size': batch_size,
+                             'rd': rd,
+                             'Image_ROCAUC': auc, 
+                             'Patch_ROCAUC': patch_auc, 
+                             'F1': f1, 
+                             'BaseLine': base_line,
+                             'InferenceTime(s)': inference_time}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(path, index=False)

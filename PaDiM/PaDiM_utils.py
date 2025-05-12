@@ -3,6 +3,9 @@
 # main.py
 #   Original Author: 2021.05.02. @chanwoo.park
 #   Edited by MarShao0124 2025.03.09
+#   Edit: Correct the embbeding_concat function as described in the paper,
+#   , where the output of the layers are concatenated by the w and h layer 3, largest layer in the depth. 
+
 #   run PaDiM algorithm
 #   Reference:
 #       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
@@ -31,26 +34,18 @@ from skimage.segmentation import mark_boundaries
 ################
 #   Definition #
 ################
-def embedding_concat(l1, l2):
+def embedding_concat(l1, l2, l3):
     bs, h1, w1, c1 = l1.shape
     _, h2, w2, c2 = l2.shape
+    _, h3, w3, c3 = l3.shape
 
-    s = int(h1 / h2)
-    x = tf.compat.v1.extract_image_patches(l1, ksizes=[1, s, s, 1], strides=[1, s, s, 1], rates=[1, 1, 1, 1],
-                                           padding='VALID')
-    x = tf.reshape(x, (bs, -1, h2, w2, c1))
 
-    col_z = []
-    for idx in range(x.shape[1]):
-        col_z.append(tf.concat([x[:, idx, :, :, :], l2], axis=-1))
-    z = tf.stack(col_z, axis=1)
+    l1 = tf.image.resize(l1, (h3, w3), method='bilinear')
+    l2 = tf.image.resize(l2, (h3, w3), method='bilinear')
+    embedding = tf.concat([l1, l2, l3], axis=-1)
+    embedding = tf.reshape(embedding, (bs, h3 * w3, c1 + c2 + c3))
 
-    z = tf.reshape(z, (bs, h2, w2, -1))
-    if s == 1:
-        return z
-    z = tf.nn.depth_to_space(z, block_size=s)
-
-    return z
+    return embedding
 
 
 def plot_fig(test_img, scores, gts, threshold, save_dir, class_name):

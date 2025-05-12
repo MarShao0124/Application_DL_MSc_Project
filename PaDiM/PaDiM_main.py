@@ -3,6 +3,7 @@
 # main.py
 #   Original Author: 2021.05.02. @chanwoo.park
 #   Edited by MarShao0124 2025.03.06
+#   Edit: implement the algorithm on both MVTec and VisA datasets
 #   run PaDiM algorithm
 #   Reference:
 #       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     opt.batch_size = 32
     opt.is_plot = True
     opt.net = 'res'
-    opt.data = 'mvtec'
+    opt.data = 'visa'
 
     if opt.seed > -1:
         np.random.seed(opt.seed)

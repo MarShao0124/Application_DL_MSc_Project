@@ -3,6 +3,8 @@
 # padim.py
 #   Original Author: 2021.05.02. @chanwoo.park
 #   Edited by MarShao0124 2025.03.06
+#   Edit: corrected the code(function padim) to the algorithm applied in the paper, and improved
+#         the accuracy compared with the original code. 
 #   PaDiM algorithm
 #   Reference:
 #       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
@@ -61,7 +63,7 @@ def embedding_net(net_type='res'):
 
     model.trainable = False
     # model.summary(line_length=100)
-    shape = (layer1.shape[1], layer1.shape[2], layer1.shape[3] + layer2.shape[3] + layer3.shape[3])
+    shape = (layer3.shape[1], layer3.shape[2], layer1.shape[3] + layer2.shape[3] + layer3.shape[3])
 
     return tf.keras.Model(model.input, outputs=[layer1, layer2, layer3]), shape
 
@@ -82,32 +84,31 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
     test_set = loader.test.batch(batch_size=1, drop_remainder=False)
 
     net, _shape = embedding_net(net_type=net_type)
-    h, w, c = _shape  # height and width of layer1, channel sum of layer 1, 2, and 3, and randomly sampled dimension
+    h, w, c = _shape  # height and width of layer3, channel sum of layer 1, 2, and 3, and randomly sampled dimension
 
     # concatenate patch of layer1, layer2, and layer3 of the pre-trained network
     out = []
     for x, _, _ in train_set:
         l1, l2, l3 = net(x)
-        _out = tf.reshape(embedding_concat(embedding_concat(l1, l2), l3), (batch_size, h * w, c))  # (b, h x w, c)
+        _out = embedding_concat(l1,l2,l3) # (bs, h * w, c1+c2+c3)
         out.append(_out.numpy())
 
+    out = np.concatenate(out, axis=0)  # or np.stack(out, axis=0)
+    out = out.transpose(0, 2, 1)  # (batch_size, c1+c2+c3, h*w)
+
     # calculate multivariate Gaussian distribution.
-    out = np.concatenate(out, axis=0)
-    out = np.transpose(out, axes=[0, 2, 1])  # (b, c, h * w)
-
     # RD: random dimension selecting
-    tmp = tf.unstack(out, axis=0)
-    _tmp = []
-    rd_indices = tf.random.shuffle(tf.range(c))[:rd]
-    for tensor in tmp:
-        _tmp.append(tf.gather(tensor, rd_indices))
-    out = tf.stack(_tmp, axis=0)
+    c = out.shape[-2]
+    rd_indices = np.random.choice(c, size=rd, replace=False)
+    out = out[:, rd_indices, :]  # shape: (batch_size, rd, h*w)
 
-    mu = np.mean(out, axis=0)
-    cov = np.zeros((rd, rd, h * w))
+
+    # Compute mean and covariance
+    mu = np.mean(out, axis=0)  # shape: (rd, h*w)
+    cov = np.zeros((rd, rd, h*w))
+    print(cov.shape)
     identity = np.identity(rd)
-
-    for idx in range(h * w):
+    for idx in range(h*w):
         cov[:, :, idx] = np.cov(out[:, :, idx], rowvar=False) + 0.01 * identity
 
     train_outputs = [mu, cov]
@@ -126,13 +127,13 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
         gt_mask.append(y.numpy())
 
         l1, l2, l3 = net(x)
-        _out = tf.reshape(embedding_concat(embedding_concat(l1, l2), l3), (batch_size, h * w, c))  # (BS, h x w, c)
-        out.append(_out.numpy())
+        _out = embedding_concat(l1,l2,l3) # (bs, h * w, c1+c2+c3)
+        out.append(_out.numpy()) 
 
     # calculate multivariate Gaussian distribution. skip random dimension selecting
     out = np.concatenate(out, axis=0)
     gt_list = np.concatenate(gt_list, axis=0)
-    out = np.transpose(out, axes=[0, 2, 1])
+    out = np.transpose(out, axes=[0, 2, 1]) # (bs, c1+c2+c3, h*w)
 
     # RD
     tmp = tf.unstack(out, axis=0)
@@ -144,7 +145,7 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
     b, _, _ = out.shape
 
     dist_list = []
-    for idx in range(h * w):
+    for idx in range(h*w):
         mu = train_outputs[0][:, idx]
         cov_inv = np.linalg.inv(train_outputs[1][:, :, idx])
         dist = [mahalanobis(sample[:, idx], mu, cov_inv) for sample in out]
@@ -179,9 +180,9 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
         fpr, tpr, _ = metrics.roc_curve(gt_list, img_scores)
         precision, recall, _ = metrics.precision_recall_curve(gt_list, img_scores)
 
-        save_dir = os.path.join(os.path.dirname(__file__), 'img',data,'img_'+category)
+        save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,'img_'+category)
         if os.path.isdir(save_dir) is False:
-            os.mkdir(save_dir)
+            os.makedirs(save_dir)
         draw_auc(fpr, tpr, img_roc_auc, os.path.join(save_dir, 'AUROC-{}.png'.format(category)))
         base_line = np.sum(gt_list) / len(gt_list)
         f1 = draw_precision_recall(precision, recall, base_line, os.path.join(os.path.join(save_dir,
@@ -222,12 +223,13 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
     print('[{}] image ROCAUC: {:.04f}\t pixel ROCAUC: {:.04f}'.format(category, img_roc_auc, patch_auc))
 
     if is_plot is True:
-        save_dir = os.path.join(os.path.dirname(__file__), 'img',data,'img_'+category)
+        save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,'img_'+category)
+        print('save_dir:', save_dir)
         if os.path.isdir(save_dir) is False:
-            os.mkdir(save_dir)
+            os.makedirs(save_dir)
         plot_fig(test_imgs, scores, gt_mask, best_ths, save_dir, category)
 
-    save_dir = os.path.join(os.path.dirname(__file__), 'img',data,data+'.csv')
+    save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,data+'.csv')
     save_result(save_dir, category,net_type,batch_size,rd,img_roc_auc, patch_auc, f1, base_line, inference_time)
 
     return img_roc_auc, patch_auc

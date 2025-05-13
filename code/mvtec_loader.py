@@ -2,7 +2,8 @@
 # """
 # mvtec_ad_loader.py
 #   Original Author: 2021.05.02. @chanwoo.park
-#   Edited by MarShao0124 2025.03.06#   
+#   Edited by MarShao0124 2025.03.06
+#   Edit: corrected the code to perfrom random crop instead of center crop
 #   Load mvtec_ad dataset
 #   Reference:
 #       Paul Bergmann, Michael Fauser, David Sattlegger, and Carsten Steger,
@@ -133,6 +134,8 @@ class MVTecADLoader(object):
 
         img = cv2.resize(img, dsize=(256, 256))
 
-        img = img[16:-16, 16:-16, :]
-
+        # random crop to 224x224
+        start_x = np.random.randint(0, 256 - 224)
+        start_y = np.random.randint(0, 256 - 224)
+        img = img[start_y:start_y + 224, start_x:start_x + 224]
         return img

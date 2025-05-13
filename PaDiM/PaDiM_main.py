@@ -72,7 +72,7 @@ if __name__ == "__main__":
     opt.target = 'pcb3'
     opt.batch_size = 32
     opt.is_plot = True
-    opt.net = 'res'
+    opt.net = 'eff'
     opt.data = 'visa'
 
     if opt.seed > -1:

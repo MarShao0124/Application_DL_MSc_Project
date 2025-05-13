@@ -49,14 +49,14 @@ def embedding_net(net_type='res'):
         layer3 = model.get_layer(name='conv5_block1_preact_relu').output
 
     elif net_type == 'eff':
-        # efficient net B7
+        # efficient net B5
         x = tf.keras.applications.efficientnet.preprocess_input(input_tensor)
-        model = tf.keras.applications.EfficientNetB7(include_top=False, weights='imagenet', input_tensor=x,
+        model = tf.keras.applications.EfficientNetB5(include_top=False, weights='imagenet', input_tensor=x,
                                                      pooling=None)
 
-        layer1 = model.get_layer(name='block5a_activation').output
-        layer2 = model.get_layer(name='block6a_activation').output
-        layer3 = model.get_layer(name='block7a_activation').output
+        layer1 = model.get_layer(name='block2a_activation').output
+        layer2 = model.get_layer(name='block3a_activation').output
+        layer3 = model.get_layer(name='block4a_activation').output
 
     else:
         raise Exception("[NotAllowedNetType] network type is not allowed ")
@@ -77,7 +77,7 @@ def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec')
         raise Exception("[NotAllowedDataset] dataset is not allowed ")
     
     
-    loader.load(category=category, repeat=1, max_rot=0)
+    loader.load(category=category, repeat=1, max_rot=10)
 
     train_set = loader.train.batch(batch_size=batch_size, drop_remainder=True).shuffle(buffer_size=loader.num_train,
                                                                                        reshuffle_each_iteration=True)

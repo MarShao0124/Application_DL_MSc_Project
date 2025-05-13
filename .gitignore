@@ -3,6 +3,5 @@ literature review
 .venv
 VisA_20220922
 mvtec_anomaly_detection
-img
 data
-img_res
+*.png

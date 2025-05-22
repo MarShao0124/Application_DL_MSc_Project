@@ -1,235 +1,230 @@
-# -*- coding: utf-8 -*-
-# """
-# padim.py
-#   Original Author: 2021.05.02. @chanwoo.park
-#   Edited by MarShao0124 2025.03.06
-#   Edit: corrected the code(function padim) to the algorithm applied in the paper, and improved
-#         the accuracy compared with the original code. 
-#   PaDiM algorithm
-#   Reference:
-#       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
-#       arXiv preprint arXiv:2011.08785 (2020).
-# """
-
-############
-#   IMPORT #
-############
-# 1. Built-in modules
-import os, sys, time
-
-# 2. Third-party modules
+import os, sys
+import timm
+import torch
+from torch import nn
+import torch.nn.functional as F
 import numpy as np
-import tensorflow as tf
-import sklearn.metrics as metrics
-
-from scipy.ndimage import gaussian_filter
+from torch.utils.data import DataLoader
 from scipy.spatial.distance import mahalanobis
+import sklearn.metrics as metrics
+from mvtec_loader import MVTecDataset
 
-# 3. Own module
-
+from PaDiM_utils import plot_fig, draw_auc, draw_precision_recall, save_result
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'code'))
-from mvtec_loader import MVTecADLoader
-from VisA_loader import VisALoader
-from PaDiM_utils import embedding_concat, plot_fig, draw_auc, draw_precision_recall, save_result
+from timm_extractor import TimmFeatureExtractor
+from anomaly_map import AnomalyMapGenerator
 
+class MultiVariateGaussian(nn.Module):
+    """Multi Variate Gaussian Distribution."""
 
-################
-#   Definition #
-################
-def embedding_net(net_type='res'):
-    input_tensor = tf.keras.layers.Input([224, 224, 3], dtype=tf.float32)
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_buffer("mean", torch.empty(0))
+        self.register_buffer("inv_covariance", torch.empty(0))
+        self.mean: torch.Tensor
+        self.inv_covariance: torch.Tensor
 
-    if net_type == 'res':
-        # resnet 50v2
-        x = tf.keras.applications.resnet_v2.preprocess_input(input_tensor)
-        model = tf.keras.applications.ResNet50V2(include_top=False, weights='imagenet', input_tensor=x, pooling=None)
+    @staticmethod
+    def _cov(observations: torch.Tensor, rowvar: bool = False) -> torch.Tensor:
+        """Estimate covariance matrix of the observations."""
+        if observations.dim() == 1:
+            observations = observations.view(-1, 1)
+        if rowvar and observations.shape[0] != 1:
+            observations = observations.t()
+        
+        avg = torch.mean(observations, dim=0)
+        observations_m = observations - avg.unsqueeze(0)
+        covariance = torch.matmul(observations_m.t(), observations_m)
+        covariance = covariance / (observations.shape[0] - 1)
+        
+        return covariance.squeeze()
 
-        layer1 = model.get_layer(name='conv3_block1_preact_relu').output
-        layer2 = model.get_layer(name='conv4_block1_preact_relu').output
-        layer3 = model.get_layer(name='conv5_block1_preact_relu').output
+    def forward(self, embedding: torch.Tensor) -> list[torch.Tensor]:
+        """Calculate multivariate Gaussian distribution parameters.
+        
+        Args:
+            embedding: Input tensor of shape (B, C, H*W) containing feature embeddings.
+        
+        Returns:
+            List containing mean tensor and inverse covariance tensor
+        """
+        device = embedding.device
+        
+        # Calculate mean over batch dimension
+        self.mean = torch.mean(embedding, dim=0)  # (C, H*W)
+        
+        batch_size, num_features, num_elements = embedding.size()
+        covariance = torch.zeros(num_elements, num_features, num_features, device=device)
+        identity = torch.eye(num_features, device=device)
+        
+        # Calculate covariance for each position
+        for i in range(num_elements):
+            covariance[i] = self._cov(embedding[:, :, i]) + 0.01 * identity
+            
+        # Add small regularization term for stability
+        covariance = covariance + 1e-5 * identity.unsqueeze(0)
+        
+        # Calculate inverse covariance
+        if device.type == "mps":
+            self.inv_covariance = torch.linalg.inv(covariance.cpu()).to(device)
+        else:
+            self.inv_covariance = torch.linalg.inv(covariance)
+            
+        return [self.mean, self.inv_covariance]
 
-    elif net_type == 'eff':
-        # efficient net B5
-        x = tf.keras.applications.efficientnet.preprocess_input(input_tensor)
-        model = tf.keras.applications.EfficientNetB5(include_top=False, weights='imagenet', input_tensor=x,
-                                                     pooling=None)
+    def fit(self, embedding: torch.Tensor) -> list[torch.Tensor]:
+        """Fit multivariate Gaussian distribution to input embeddings."""
+        return self.forward(embedding)
 
-        layer1 = model.get_layer(name='block2a_activation').output
-        layer2 = model.get_layer(name='block3a_activation').output
-        layer3 = model.get_layer(name='block4a_activation').output
-
-    else:
-        raise Exception("[NotAllowedNetType] network type is not allowed ")
-
-    model.trainable = False
-    # model.summary(line_length=100)
-    shape = (layer3.shape[1], layer3.shape[2], layer1.shape[3] + layer2.shape[3] + layer3.shape[3])
-
-    return tf.keras.Model(model.input, outputs=[layer1, layer2, layer3]), shape
-
-
-def padim(category, batch_size, rd, net_type='eff', is_plot=False, data='mvtec'):
-    if data == 'mvtec':
-        loader = MVTecADLoader()
-    elif data == 'visa':
-        loader = VisALoader()
-    else:
-        raise Exception("[NotAllowedDataset] dataset is not allowed ")
+def generate_embedding(features: dict[str, torch.Tensor], layers: list[str], rd_indices: torch.Tensor) -> torch.Tensor:
+    """Generate embedding from hierarchical feature map.
     
+    Args:
+        features: Dictionary of feature tensors from different layers
+        layers: List of layer names in order
+        rd_indices: Indices for random dimension selection
     
-    loader.load(category=category, repeat=1, max_rot=10)
+    Returns:
+        Concatenated and subsampled embedding tensor
+    """
+    embeddings = features[layers[0]]
+    for layer in layers[1:]:
+        layer_embedding = features[layer]
+        layer_embedding = F.interpolate(layer_embedding, size=embeddings.shape[-2:], mode="nearest")
+        embeddings = torch.cat((embeddings, layer_embedding), 1)
+    
+    # subsample embeddings
+    return torch.index_select(embeddings, 1, rd_indices) 
 
-    train_set = loader.train.batch(batch_size=batch_size, drop_remainder=True).shuffle(buffer_size=loader.num_train,
-                                                                                       reshuffle_each_iteration=True)
-    test_set = loader.test.batch(batch_size=1, drop_remainder=False)
+def padim(category, batch_size=32, rd=100, is_plot=True):
+    # Initialize dataset
+    train_dataset = MVTecDataset(
+        root_path='data/mvtec_anomaly_detection',
+        category=category,
+        is_train=True
+    )
+    test_dataset = MVTecDataset(
+        root_path='data/mvtec_anomaly_detection',
+        category=category,
+        is_train=False
+    )
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    net, _shape = embedding_net(net_type=net_type)
-    h, w, c = _shape  # height and width of layer3, channel sum of layer 1, 2, and 3, and randomly sampled dimension
+    # Initialize feature extractor and distribution estimator
+    feature_extractor = TimmFeatureExtractor(
+        backbone="resnet18",
+        layers=["layer1", "layer2", "layer3"],
+    )
+    feature_extractor.eval()
+    gaussian = MultiVariateGaussian()
+    
+    # Initialize anomaly map generator
+    anomaly_map_generator = AnomalyMapGenerator(sigma=4)
 
-    # concatenate patch of layer1, layer2, and layer3 of the pre-trained network
-    out = []
-    for x, _, _ in train_set:
-        l1, l2, l3 = net(x)
-        _out = embedding_concat(l1,l2,l3) # (bs, h * w, c1+c2+c3)
-        out.append(_out.numpy())
+    # Define layers in order and print their shapes
+    layers = ["layer1", "layer2", "layer3"]
 
-    out = np.concatenate(out, axis=0)  # or np.stack(out, axis=0)
-    out = out.transpose(0, 2, 1)  # (batch_size, c1+c2+c3, h*w)
+    # Get total feature dimensions from a sample batch
+    sample_batch = next(iter(train_loader))[0]
+    features = feature_extractor(sample_batch) # (b, c, h, w)
+    total_features = sum(feat.shape[1] for feat in features.values())
+    
+    # Random selection of features
+    rd_indices = torch.randperm(total_features)[:rd] 
 
-    # calculate multivariate Gaussian distribution.
-    # RD: random dimension selecting
-    c = out.shape[-2]
-    rd_indices = np.random.choice(c, size=rd, replace=False)
-    out = out[:, rd_indices, :]  # shape: (batch_size, rd, h*w)
+    # Training phase - collect features and compute distribution
+    train_outputs = []
+    for batch_imgs, _, _ in train_loader:
+        with torch.no_grad():
+            features = feature_extractor(batch_imgs) 
+            embedding = generate_embedding(features, layers, rd_indices)
+            b, c, h, w = embedding.shape # (b, rd, h, w)
+            train_outputs.append(embedding.reshape(b, c, -1)) # (b, rd, h*w)
+    
+    train_outputs = torch.cat(train_outputs, dim=0) # (train_size, rd, h*w)
+    
+    # Calculate distribution parameters using MultiVariateGaussian
+    mean, inv_covariance = gaussian.fit(train_outputs)
 
+    # Testing phase
+    test_imgs = []
+    gt_list = []
+    gt_mask_list = []
+    scores = []
+    
+    for batch_imgs, batch_masks, batch_labels in test_loader:
+        test_imgs.extend(batch_imgs.cpu().numpy())
+        gt_list.extend(batch_labels.cpu().numpy())
+        gt_mask_list.extend(batch_masks.cpu().numpy())
+        
+        with torch.no_grad():
+            features = feature_extractor(batch_imgs)
+            embedding = generate_embedding(features, layers, rd_indices)
+            b, c, h, w = embedding.shape
+            
+            # Generate anomaly map
+            score_map = anomaly_map_generator(
+                embedding=embedding,
+                mean=mean,
+                inv_covariance=inv_covariance,
+                image_size=(224, 224)
+            )
+            scores.extend(score_map.cpu().numpy())
 
-    # Compute mean and covariance
-    mu = np.mean(out, axis=0)  # shape: (rd, h*w)
-    cov = np.zeros((rd, rd, h*w))
-    print(cov.shape)
-    identity = np.identity(rd)
-    for idx in range(h*w):
-        cov[:, :, idx] = np.cov(out[:, :, idx], rowvar=False) + 0.01 * identity
+    scores = np.array(scores)
+    gt_mask_list = np.array(gt_mask_list)
+    gt_list = np.array(gt_list)
+    test_imgs = np.array(test_imgs)
 
-    train_outputs = [mu, cov]
+    # Normalize scores
+    max_score = scores.max()
+    min_score = scores.min()
+    scores = (scores - min_score) / (max_score - min_score)
 
-    ################
-    #   TEST DATA  #
-    ################
-    out, gt_list, gt_mask, batch_size, test_imgs = [], [], [], 1, []
-
-    start_time = time.time()
-
-    #  x - data |   y - mask    |   z - binary label
-    for x, y, z in test_set:
-        test_imgs.append(x.numpy())
-        gt_list.append(z.numpy())
-        gt_mask.append(y.numpy())
-
-        l1, l2, l3 = net(x)
-        _out = embedding_concat(l1,l2,l3) # (bs, h * w, c1+c2+c3)
-        out.append(_out.numpy()) 
-
-    # calculate multivariate Gaussian distribution. skip random dimension selecting
-    out = np.concatenate(out, axis=0)
-    gt_list = np.concatenate(gt_list, axis=0)
-    out = np.transpose(out, axes=[0, 2, 1]) # (bs, c1+c2+c3, h*w)
-
-    # RD
-    tmp = tf.unstack(out, axis=0)
-    _tmp = []
-    for tensor in tmp:
-        _tmp.append(tf.gather(tensor, rd_indices))
-    out = tf.stack(_tmp, axis=0)
-
-    b, _, _ = out.shape
-
-    dist_list = []
-    for idx in range(h*w):
-        mu = train_outputs[0][:, idx]
-        cov_inv = np.linalg.inv(train_outputs[1][:, :, idx])
-        dist = [mahalanobis(sample[:, idx], mu, cov_inv) for sample in out]
-        dist_list.append(dist)
-
-    dist_list = np.reshape(np.transpose(np.asarray(dist_list), axes=[1, 0]), (b, h, w))
-
-    end_time = time.time()
-    inference_time = (end_time - start_time)/len(test_set)
-    ################
-    #   DATA Level #
-    ################
-    # upsample
-    score_map = tf.squeeze(tf.image.resize(np.expand_dims(dist_list, -1), size=[h, w])).numpy()
-
-    for i in range(score_map.shape[0]):
-        score_map[i] = gaussian_filter(score_map[i], sigma=4)
-
-    # Normalization
-    max_score = score_map.max()
-    min_score = score_map.min()
-    scores = (score_map - min_score) / (max_score - min_score)
-    scores = -scores
-
-    # calculate image-level ROC AUC score
+    # Calculate image-level ROC AUC score
     img_scores = scores.reshape(scores.shape[0], -1).max(axis=1)
-
-    gt_list = np.asarray(gt_list)
     img_roc_auc = metrics.roc_auc_score(gt_list, img_scores)
-
-    if is_plot is True:
+    
+    # Calculate pixel-wise ROC AUC score
+    pixel_roc_auc = metrics.roc_auc_score(gt_mask_list.flatten(), scores.flatten())
+    
+    if is_plot:
+        # Calculate metrics for plotting
         fpr, tpr, _ = metrics.roc_curve(gt_list, img_scores)
         precision, recall, _ = metrics.precision_recall_curve(gt_list, img_scores)
-
-        save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,'img_'+category)
-        if os.path.isdir(save_dir) is False:
-            os.makedirs(save_dir)
-        draw_auc(fpr, tpr, img_roc_auc, os.path.join(save_dir, 'AUROC-{}.png'.format(category)))
+        
+        # Get optimal threshold
+        precision_pixel, recall_pixel, threshold = metrics.precision_recall_curve(
+            gt_mask_list.flatten(), scores.flatten(), pos_label=1
+        )
+        f1_scores = 2 * precision_pixel * recall_pixel / (precision_pixel + recall_pixel)
+        optimal_threshold = threshold[np.argmax(f1_scores)]
+        
+        # Save plots
+        save_dir = os.path.join(os.path.dirname(__file__), 'results', category)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Draw ROC and PR curves
+        draw_auc(fpr, tpr, img_roc_auc, os.path.join(save_dir, f'AUROC-{category}.png'))
         base_line = np.sum(gt_list) / len(gt_list)
-        f1 = draw_precision_recall(precision, recall, base_line, os.path.join(os.path.join(save_dir,
-                                                                                      'PR-{}.png'.format(category))))
+        f1 = draw_precision_recall(precision, recall, base_line, os.path.join(save_dir, f'PR-{category}.png'))
+        
+        # Plot sample results
+        plot_fig(test_imgs, scores, gt_mask_list, optimal_threshold, save_dir, category)
+        
+        # Save results
+        save_dir = os.path.join(os.path.dirname(__file__), 'results', 'metrics.csv')
+        save_result(save_dir, category, 'resnet18', batch_size, rd, img_roc_auc, pixel_roc_auc, f1, base_line, 0)
 
-    #################
-    #   PATCH Level #
-    #################
-    # upsample
-    score_map = tf.squeeze(tf.image.resize(np.expand_dims(dist_list, -1), size=[224, 224])).numpy()
+    print(f'Category: {category}')
+    print(f'Image AUC: {img_roc_auc:.4f}')
+    print(f'Pixel AUC: {pixel_roc_auc:.4f}')
+    
+    return img_roc_auc, pixel_roc_auc
 
-    for i in range(score_map.shape[0]):
-        score_map[i] = gaussian_filter(score_map[i], sigma=4)
+    
 
-    # Normalization
-    max_score = score_map.max()
-    min_score = score_map.min()
-    scores = (score_map - min_score) / (max_score - min_score)
-    # Note that Binary mask indicates 0 for good and 1 for anomaly. It is opposite from our setting.
-    # scores = -scores
 
-    # calculate per-pixel level ROCAUC
-    gt_mask = np.asarray(gt_mask)
-    fp_list, tp_list, _ = metrics.roc_curve(gt_mask.flatten(), scores.flatten())
-    patch_auc = metrics.auc(fp_list, tp_list)
 
-    precision, recall, threshold = metrics.precision_recall_curve(gt_mask.flatten(), scores.flatten(), pos_label=1)
-    numerator = 2 * precision * recall
-    denominator = precision + recall
-
-    numerator[np.where(denominator == 0)] = 0
-    denominator[np.where(denominator == 0)] = 1
-
-    # get optimal threshold
-    f1_list = numerator / denominator
-    best_ths = threshold[np.argmax(f1_list).astype(int)]
-
-    print('[{}] image ROCAUC: {:.04f}\t pixel ROCAUC: {:.04f}'.format(category, img_roc_auc, patch_auc))
-
-    if is_plot is True:
-        save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,'img_'+category)
-        print('save_dir:', save_dir)
-        if os.path.isdir(save_dir) is False:
-            os.makedirs(save_dir)
-        plot_fig(test_imgs, scores, gt_mask, best_ths, save_dir, category)
-
-    save_dir = os.path.join(os.path.dirname(__file__), 'img_'+net_type,data,data+'.csv')
-    save_result(save_dir, category,net_type,batch_size,rd,img_roc_auc, patch_auc, f1, base_line, inference_time)
-
-    return img_roc_auc, patch_auc

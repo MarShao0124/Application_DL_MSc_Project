@@ -1,85 +1,128 @@
 # -*- coding: utf-8 -*-
-# """
-# main.py
-#   Original Author: 2021.05.02. @chanwoo.park
-#   Edited by MarShao0124 2025.03.06
-#   Edit: implement the algorithm on both MVTec and VisA datasets
-#   run PaDiM algorithm
-#   Reference:
-#       Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
-#       arXiv preprint arXiv:2011.08785 (2020).
-# """
+"""
+new_padim_main.py
+Main script to run the PyTorch implementation of PaDiM algorithm.
+Reference:
+    Defard, Thomas, et al. "PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization."
+    arXiv preprint arXiv:2011.08785 (2020).
+"""
 
-############
-#   IMPORT #
-############
-# 1. Built-in modules
 import os
 import argparse
-
-# 2. Third-party modules
 import random
 import numpy as np
-import tensorflow as tf
+import torch
+from PaDiM import padim
 
-# 3. Own modules
-from padim import padim
+# For reproducibility
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
-# For reproducibility, you can run scripts on CPU
-# # Set CPU as available physical device
-# my_devices = tf.config.experimental.list_physical_devices(device_type='CPU')
-# tf.config.experimental.set_visible_devices(devices= my_devices, device_type='CPU')
-#
-# # To find out which devices your operations and tensors are assigned to
-# tf.debugging.set_log_device_placement(True)
+# Define available targets for MVTec dataset
+MVTEC_TARGETS = [
+    'bottle', 'cable', 'capsule', 'carpet', 'grid', 
+    'hazelnut', 'leather', 'metal_nut', 'pill', 'screw',
+    'tile', 'toothbrush', 'transistor', 'wood', 'zipper'
+]
 
-# For the reproducibility - please check https://github.com/NVIDIA/framework-determinism
-os.environ['PYTHONHASHSEED'] = str(1)
-os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+def parse_args():
+    parser = argparse.ArgumentParser(description='PyTorch Implementation of PaDiM')
+    
+    # Dataset parameters
+    parser.add_argument('--target', type=str, default='bottle',
+                        choices=MVTEC_TARGETS,
+                        help='Target object from MVTec dataset')
+    parser.add_argument('--data_path', type=str, 
+                        default='data/mvtec_anomaly_detection',
+                        help='Path to the MVTec dataset')
+    
+    # Model parameters
+    parser.add_argument('--backbone', type=str, default='resnet18',
+                        choices=['resnet18', 'wide_resnet50_2'],
+                        help='Backbone network architecture')
+    parser.add_argument('--rd', type=int, default=100,
+                        help='Random sampling dimension')
+    
+    # Training parameters
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for training')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
+    
+    # Visualization parameters
+    parser.add_argument('--save_plots', action='store_true',
+                        help='Save visualization plots')
+    parser.add_argument('--results_path', type=str, default='results',
+                        help='Path to save results')
+    
+    # Run mode
+    parser.add_argument('--run_all', action='store_true',
+                        help='Run PaDiM on all MVTec categories')
+    
+    return parser.parse_args()
 
-
-################
-#   Definition #
-################
-parser = argparse.ArgumentParser()
-parser.add_argument("--seed", default=10, type=int, help='What seed to use')
-parser.add_argument("--rd", default=1000, type=int, help='Random sampling dimension')
-parser.add_argument("--target", default='carpet', type=str, help="Which target to test")
-parser.add_argument("--batch_size", default=32, type=int, help="What batch size to use")
-parser.add_argument("--is_plot", default=True, type=bool, help="Whether to plot or not")
-parser.add_argument("--net", default='eff', type=str, help="Which embedding network to use", choices=['eff', 'res'])
-parser.add_argument("--data", default='mvtec', type=str, help="Which dataset to use", choices=['mvtec', 'visa'])
-
-args = parser.parse_args()
-
-# Target list for different datasets
-
-targets = {
-    'mvtec': ['bottle', 'cable', 'capsule', 'carpet', 'grid', 'hazelnut', 
-              'leather', 'metal_nut', 'pill', 'screw','tile', 'toothbrush', 
-              'transistor', 'wood', 'zipper'],
-
-    'visa' : ['pcb3', 'pipe_fryum', 'pcb4', 'pcb2', 'candle', 'fryum', 
-              'macaroni2', 'capsules', 'pcb1', 'chewinggum', 'macaroni1', 
-              'cashew']
-}
-
+def main():
+    args = parse_args()
+    
+    # Set random seed for reproducibility
+    set_seed(args.seed)
+    
+    # Create results directory if it doesn't exist
+    os.makedirs(args.results_path, exist_ok=True)
+    
+    if args.run_all:
+        # Run PaDiM on all MVTec categories
+        results = {}
+        for target in MVTEC_TARGETS:
+            print(f"\n=== Running PaDiM on {target} ===")
+            img_auc, pixel_auc = padim(
+                category=target,
+                batch_size=args.batch_size,
+                rd=args.rd,
+                is_plot=args.save_plots
+            )
+            results[target] = {
+                'image_auc': img_auc,
+                'pixel_auc': pixel_auc
+            }
+        
+        # Print summary of results
+        print("\n=== Summary of Results ===")
+        img_aucs = []
+        pixel_aucs = []
+        for target, metrics in results.items():
+            img_aucs.append(metrics['image_auc'])
+            pixel_aucs.append(metrics['pixel_auc'])
+            print(f"{target}:")
+            print(f"  Image AUC: {metrics['image_auc']:.4f}")
+            print(f"  Pixel AUC: {metrics['pixel_auc']:.4f}")
+        
+        print("\nOverall Performance:")
+        print(f"Mean Image AUC: {np.mean(img_aucs):.4f}")
+        print(f"Mean Pixel AUC: {np.mean(pixel_aucs):.4f}")
+    
+    else:
+        # Run PaDiM on single category
+        print(f"\n=== Running PaDiM on {args.target} ===")
+        img_auc, pixel_auc = padim(
+            category=args.target,
+            batch_size=args.batch_size,
+            rd=args.rd,
+            is_plot=args.save_plots
+        )
+        print(f"\nResults for {args.target}:")
+        print(f"Image AUC: {img_auc:.4f}")
+        print(f"Pixel AUC: {pixel_auc:.4f}")
 
 if __name__ == "__main__":
-    opt = args
-    opt.seed = 10
-    opt.rd = 100
-    opt.target = 'pcb3'
-    opt.batch_size = 32
-    opt.is_plot = True
-    opt.net = 'eff'
-    opt.data = 'visa'
+    main()
 
-    if opt.seed > -1:
-        np.random.seed(opt.seed)
-        random.seed(opt.seed)
-        tf.random.set_seed(opt.seed)
-
-    for each in targets[opt.data]:
-        opt.target = each
-        padim(category=opt.target, batch_size=opt.batch_size, rd=opt.rd, net_type=opt.net, is_plot=opt.is_plot, data=opt.data)
+#python padim/padim_main.py --run_all --batch_size 32 --rd 100 --save_plots

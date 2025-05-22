@@ -39,6 +39,7 @@ def embedding_concat(l1, l2, l3):
     _, h2, w2, c2 = l2.shape
     _, h3, w3, c3 = l3.shape
 
+
     l1 = tf.image.resize(l1, (h3, w3), method='bilinear')
     l2 = tf.image.resize(l2, (h3, w3), method='bilinear')
     embedding = tf.concat([l1, l2, l3], axis=-1)
@@ -52,84 +53,44 @@ def plot_fig(test_img, scores, gts, threshold, save_dir, class_name):
     vmax = scores.max() * 255.
     vmin = scores.min() * 255.
     for i in range(num):
-        # Handle test image
-        img = test_img[i]
-        if img.shape[0] == 3:  # If channels first, transpose to channels last
-            img = img.transpose(1, 2, 0)
+        img = test_img[i][0]
 
-        # Handle ground truth mask
-        gt = gts[i]
-        if gt.ndim == 3:  # If 3D tensor
-            gt = gt.squeeze()  # Remove singleton dimensions
-        
-        # Create heatmap and binary mask
+        gt = gts[i].transpose(1, 2, 0).squeeze()
+
         heat_map = scores[i] * 255
-        # Ensure heat_map is 2D
-        if heat_map.ndim == 3:
-            heat_map = heat_map.squeeze()
-        
-        mask = scores[i].copy()
-        # Ensure mask is 2D
-        if mask.ndim == 3:
-            mask = mask.squeeze()
-            
-        # Thresholding
+        mask = scores[i]
         mask[mask > threshold] = 1
         mask[mask <= threshold] = 0
 
-        # Apply morphological operations
         kernel = morphology.disk(4)
-        # Ensure both mask and kernel are 2D
-        mask = mask.astype(np.float32)  # Convert to float32 for morphological operations
         mask = morphology.opening(mask, kernel)
         mask *= 255
-        
-        # Create visualization
-        # Ensure mask is in the correct format for mark_boundaries
-        mask_2d = mask.astype(bool)  # Convert to boolean for mark_boundaries
-        vis_img = mark_boundaries(img, mask_2d, color=(1, 0, 0), mode='thick')
-        
-        # Create subplot
+        vis_img = mark_boundaries(img, mask, color=(1, 0, 0), mode='thick')
         fig_img, ax_img = plt.subplots(1, 5, figsize=(12, 3))
         fig_img.subplots_adjust(right=0.9)
         norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
-        
-        # Configure axes
         for ax_i in ax_img:
             ax_i.axes.xaxis.set_visible(False)
             ax_i.axes.yaxis.set_visible(False)
-            
-        # Plot original image
-        ax_img[0].imshow(img)
+        ax_img[0].imshow(img.astype(int))
         ax_img[0].title.set_text('Image')
-        
-        # Plot ground truth
-        ax_img[1].imshow(gt, cmap='gray')
+        ax_img[1].imshow(gt.astype(int), cmap='gray')
         ax_img[1].title.set_text('GroundTruth')
-        
-        # Plot heatmap
-        # First show the base image in grayscale
-        ax_img[2].imshow(img, cmap='gray', interpolation='none')
-        # Then overlay the heatmap
-        heatmap_overlay = ax_img[2].imshow(heat_map, cmap='jet', norm=norm, alpha=0.5)
+        ax = ax_img[2].imshow(heat_map, cmap='jet', norm=norm)
+        ax_img[2].imshow(img.astype(int), cmap='gray', interpolation='none')
+        ax_img[2].imshow(heat_map, cmap='jet', alpha=0.5, interpolation='none')
         ax_img[2].title.set_text('Predicted heat map')
-        
-        # Plot predicted mask
-        ax_img[3].imshow(mask, cmap='gray')
+        ax_img[3].imshow(mask.astype(int), cmap='gray')
         ax_img[3].title.set_text('Predicted mask')
-        
-        # Plot segmentation
-        ax_img[4].imshow(vis_img)
+        ax_img[4].imshow(vis_img.astype(int))
         ax_img[4].title.set_text('Segmentation result')
-        
-        # Add colorbar
         left = 0.92
         bottom = 0.15
         width = 0.015
         height = 1 - 2 * bottom
         rect = [left, bottom, width, height]
         cbar_ax = fig_img.add_axes(rect)
-        cb = plt.colorbar(heatmap_overlay, shrink=0.6, cax=cbar_ax, fraction=0.046)
+        cb = plt.colorbar(ax, shrink=0.6, cax=cbar_ax, fraction=0.046)
         cb.ax.tick_params(labelsize=8)
         font = {
             'family': 'serif',
@@ -139,7 +100,6 @@ def plot_fig(test_img, scores, gts, threshold, save_dir, class_name):
         }
         cb.set_label('Anomaly Score', fontdict=font)
 
-        # Save and close
         fig_img.savefig(os.path.join(save_dir, class_name + '_{}'.format(i)), dpi=100)
         plt.close()
 

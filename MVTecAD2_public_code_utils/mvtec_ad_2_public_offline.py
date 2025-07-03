@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 from torchvision.datasets.folder import default_loader
 from torchvision.transforms.functional import to_tensor
 
-PATH_TO_MVTEC_AD_2_FOLDER = 'PATH_TO_.../mvtec_ad_2'
+PATH_TO_MVTEC_AD_2_FOLDER = 'data/mvtec_ad_2'
 MVTEC_AD_2_OBJECTS = [
     'can',
     'fabric',
